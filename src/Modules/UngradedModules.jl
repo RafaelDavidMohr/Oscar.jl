@@ -6443,55 +6443,15 @@ function free_resolution(M::SubquoModule{<:MPolyRingElem};
     cc_complete = true
   end
 
-  br_name = AbstractAlgebra.find_name(base_ring(M))
-  if br_name === nothing
-    br_name = "R"
-  end
-
-  #= Add maps from free resolution computation, start with second entry
-   = due to inclusion of presentation(M) at the beginning. =#
-  j   = 1
-  while j <= Singular.length(res)
-    if is_graded(M)
-      codom = domain(maps[1])
-      rk    = Singular.ngens(res[j])
-      SM    = SubModuleOfFreeModule(codom, res[j])
-      generator_matrix(SM)
-      ff = graded_map(codom, SM.matrix)
-      dom = domain(ff)
-      set_attribute!(dom, :name => "$br_name^$rk")
-      insert!(maps, 1, ff)
-      j += 1
-    else
-      codom = domain(maps[1])
-      rk    = Singular.ngens(res[j])
-      dom   = free_module(br, rk)
-      SM    = SubModuleOfFreeModule(codom, res[j])
-      generator_matrix(SM)
-      set_attribute!(dom, :name => "$br_name^$rk")
-      insert!(maps, 1, hom(dom, codom, SM.matrix))
-      j += 1
-    end
-  end
-  if cc_complete == true
-    # Finalize maps.
-    if is_graded(domain(maps[1]))
-      Z = graded_free_module(br, 0)
-    else
-      Z = FreeMod(br, 0)
-    end
-    set_attribute!(Z, :name => "0")
-    insert!(maps, 1, hom(Z, domain(maps[1]), Vector{elem_type(domain(maps[1]))}()))
-  end
-
-  cc = Hecke.ComplexOfMorphisms(Oscar.ModuleFP, maps, check = false, seed = -2)
+  cc = _convert_to_cc(res, maps, br, is_graded(M), cc_complete)
   cc.fill     = _extend_free_resolution
   cc.complete = cc_complete
   set_attribute!(cc, :show => free_show, :free_res => M)
-  set_attribute!(cc, :algorithm, algorithm)
+  set_attribute!(cc, :algorithm => algorithm)
 
   return FreeResolution(cc)
 end
+
 
 function free_resolution(M::SubquoModule{T}) where {T<:RingElem}
   # This generic code computes a free resolution in a lazy way.
@@ -6566,6 +6526,28 @@ function free_resolution_via_kernels(M::SubquoModule, limit::Int = -1)
   C = Hecke.ComplexOfMorphisms(ModuleFP, mp, check = false, seed = -2)
   #set_attribute!(C, :show => free_show, :free_res => M) # doesn't work
   return FreeResolution(C)
+end
+
+function minimize_free_res!(fr::FreeResolution)
+
+  mps = fr.C.maps
+  lmps = length(mps)
+  imgs = [image(mps[i])[1] for i in reverse(1:lmps-2)]
+  singular_mods = (imgs .|>
+    (mod -> ModuleGens(ambient_representatives_generators(mod), ambient_free_module(mod))) .|>
+    singular_generators)
+  sing_res = Singular.Resolution(singular_mods)
+  min_res = Singular.minres(sing_res)
+  br = base_ring(first(imgs))
+  cc_new = _convert_to_cc(min_res, [mps[i] for i in lmps-1:lmps],
+                          br, is_graded(first(imgs)), fr.C.complete)
+  cc_new.fill     = _extend_free_resolution
+  cc_new.complete = fr.C.complete
+  fres = get_attribute(fr.C, :free_res)
+  alg = get_attribute(fr.C, :algorithm)
+  set_attribute!(cc_new, :show => free_show, :free_res => fres, :algorithm => alg)
+  fr.C = cc_new
+  return fr
 end
 
 function Hecke.ring(I::MPolyIdeal)
@@ -9075,3 +9057,51 @@ function tensor_product(maps::Vector{<:ModuleFPHom})
   return tensor_product(dom, cod, maps)
 end
 
+# extend maps by maps from res and return a corresponding
+# Hecke CC. for internal use only
+function _convert_to_cc(res::Singular.sresolution,
+                        maps::Vector{HOM},
+                        br::MPolyRing,
+                        isgraded::Bool,
+                        cc_complete::Bool) where {HOM <: ModuleFPHom}
+
+  j   = 1
+  br_name = AbstractAlgebra.find_name(br)
+  while j <= Singular.length(res)
+    if isgraded
+      codom = domain(maps[1])
+      rk    = Singular.ngens(res[j])
+      SM    = SubModuleOfFreeModule(codom, res[j])
+      generator_matrix(SM)
+      ff = graded_map(codom, SM.matrix)
+      dom = domain(ff)
+      set_attribute!(dom, :name => "$br_name^$rk")
+      insert!(maps, 1, ff)
+      j += 1
+    else
+      codom = domain(maps[1])
+      rk    = Singular.ngens(res[j])
+      dom   = free_module(br, rk)
+      SM    = SubModuleOfFreeModule(codom, res[j])
+      generator_matrix(SM)
+      set_attribute!(dom, :name => "$br_name^$rk")
+      insert!(maps, 1, hom(dom, codom, SM.matrix))
+      j += 1
+    end
+  end
+  if cc_complete == true
+    # Finalize maps.
+    if is_graded(domain(maps[1]))
+      Z = graded_free_module(br, 0)
+    else
+      Z = FreeMod(br, 0)
+    end
+    set_attribute!(Z, :name => "0")
+    insert!(maps, 1, hom(Z, domain(maps[1]), Vector{elem_type(domain(maps[1]))}()))
+  end
+
+  return Hecke.ComplexOfMorphisms(Oscar.ModuleFP, maps,
+                                  check = false, seed = -2)
+  
+end
+  
