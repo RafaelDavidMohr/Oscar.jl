@@ -6532,13 +6532,24 @@ function minimize_free_res!(fr::FreeResolution)
 
   mps = fr.C.maps
   lmps = length(mps)
+
+  # resolution has shape ... -> F2 -> F1 -> M -> 0
+  # take ... -> F2 -> F1
   imgs = [image(mps[i])[1] for i in reverse(1:lmps-2)]
-  singular_mods = (imgs .|>
-    (mod -> ModuleGens(ambient_representatives_generators(mod), ambient_free_module(mod))) .|>
-    singular_generators)
+  # convert to singular modules
+  singular_mods =
+    (imgs .|>
+    (mod -> ModuleGens(ambient_representatives_generators(mod),
+                       ambient_free_module(mod))) .|>
+     singular_generators)
+  # minimize presentation of M
+  # cokern = first(singular_mods)
+  # cokern_min, phi = Singular.prune_with_map(cokern)
   sing_res = Singular.Resolution(singular_mods)
   min_res = Singular.minres(sing_res)
   br = base_ring(first(imgs))
+
+  # convert back to chain complex
   cc_new = _convert_to_cc(min_res, [mps[i] for i in lmps-1:lmps],
                           br, is_graded(first(imgs)), fr.C.complete)
   cc_new.fill     = _extend_free_resolution
@@ -9103,5 +9114,42 @@ function _convert_to_cc(res::Singular.sresolution,
   return Hecke.ComplexOfMorphisms(Oscar.ModuleFP, maps,
                                   check = false, seed = -2)
   
+end
+
+function _minimal_presentation(pr::ComplexOfMorphisms{ModuleFP})
+  psi = map(pr, 1)
+  img = image(psi)[1]
+  sing_cokern = singular_generators(ModuleGens(ambient_representatives_generators(img),
+                                               ambient_free_module(img)))
+  Q, phi = Singular.prune_with_map(sing_cokern)
+
+  R = base_ring(img)
+  A = transpose(matrix(psi))
+  B = zero_matrix(R, rank(Q), ngens(Q))
+  for j in 1:ngens(Q)
+    jgen = Array(Q[j])
+    for i in 1:rank(Q)
+      B[i, j] = jgen[i]
+    end
+  end
+
+  C = zero_matrix(R, nrows(phi), ncols(phi))
+  for i in 1:nrows(phi)
+    for j in 1:ncols(phi)
+      C[i, j] = phi[i, j]
+    end
+  end
+
+  # figure out which generators were chosen for the minimal presentation
+  # this is the worst thing in the known universe
+  orig_rank = ngens(pr[0])
+  id = identity_matrix(R, orig_rank)
+  for ch in subsets(orig_rank, rank(Q))
+    mat = id[:, ch]
+    if mat*B == A*C
+      return mat, SubquoModule(identity_matrix(R, rank(Q)), B)
+    end
+  end
+  error("oh no")
 end
   
